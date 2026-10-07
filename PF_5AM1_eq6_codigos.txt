@@ -1,0 +1,69 @@
+import pandas as pd
+import numpy as np
+import knime.scripting.io as knio
+
+# Leer tabla desde KNIME
+df = knio.input_tables[0].to_pandas()
+
+# Normalizar nombres de columnas 
+df.columns = (
+    df.columns.astype(str)
+      .str.strip()
+      .str.replace(" ", "_", regex=False)
+)
+
+# 3) Columnas categóricas
+cat_cols = [
+    "Booking_Status",
+    "Vehicle_Type",
+    "Pickup_Location",
+    "Drop_Location",
+    "Canceled_Rides_by_Customer",
+    "Canceled_Rides_by_Driver",
+    "Incomplete_Rides",
+    "Incomplete_Rides_Reason",
+    "Payment_Method",
+]
+
+# Strings que significan "no info" pero vienen como texto
+NULL_LIKE = {
+    "null", "none", "nan", "na", "n/a", "nil", "",
+    "-", "--", "not available", "no data", "missing"
+}
+
+# Rellenos semánticos por columna
+semantic_fills = {
+    "Canceled_Rides_by_Customer": "No_Customer_Cancellation",
+    "Canceled_Rides_by_Driver": "No_Driver_Cancellation",
+    "Payment_Method": "No_Payment_Info",
+    "Incomplete_Rides": "No",
+    "Incomplete_Rides_Reason": "Not_Incomplete",
+}
+
+DEFAULT_NO_INFO = "No_Info"
+
+def clean_and_map(series: pd.Series, fill_value: str) -> pd.Series:
+    # Mantiene NaN reales como NaN; limpia strings; convierte null-like textuales a NaN temporal
+    s = series.where(series.isna(), series.astype(str).str.strip())
+    mask = s.where(s.isna(), s.str.lower()).isin(NULL_LIKE)
+    s = s.mask(mask, np.nan)
+    # Relleno semántico final (no dejar missing)
+    return s.fillna(fill_value)
+
+# Aplicar limpieza 
+for col in cat_cols:
+    if col in df.columns:
+        fill = semantic_fills.get(col, DEFAULT_NO_INFO)
+        df[col] = clean_and_map(df[col], fill)
+
+# Normalizar Incomplete_Rides a Yes/No 
+if "Incomplete_Rides" in df.columns:
+    s = df["Incomplete_Rides"].astype(str).str.strip().str.lower()
+    df["Incomplete_Rides"] = np.where(
+        s.isin(["yes", "y", "true", "1"]),
+        "Yes",
+        np.where(s.isin(["no", "n", "false", "0"]), "No", df["Incomplete_Rides"])
+    )
+
+# Salida a KNIME
+knio.output_tables[0] = knio.Table.from_pandas(df)
